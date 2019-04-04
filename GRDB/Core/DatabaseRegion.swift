@@ -63,8 +63,10 @@ public struct DatabaseRegion: CustomStringConvertible, Equatable {
         self.init(tableRegions: [:])
     }
     
-    /// A full table: (all columns in the table) × (all rows)
-    init(table: String) {
+    /// Creates a region that spans all rows and columns of a database table.
+    ///
+    /// - parameter table: A table name.
+    public init(table: String) {
         self.init(tableRegions: [table: TableRegion(columns: nil, rowIds: nil)])
     }
     
