@@ -238,9 +238,9 @@ extension Database {
         let dbPointer = Unmanaged.passUnretained(self).toOpaque()
         sqlite3_trace_v2(
             sqliteConnection,
-            UInt32(SQLITE_TRACE_STMT),
-            { (mask, dbPointer, stmt, unexpandedSQL) -> Int32 in
-                Database.trace_v2(mask, dbPointer, stmt, unexpandedSQL, sqlite3_expanded_sql)
+            UInt32(SQLITE_TRACE_PROFILE), //UInt32(SQLITE_TRACE_PROFILE | SQLITE_TRACE_STMT),
+            { (traceType, dbPointer, p, x) -> Int32 in
+                Database.trace_v2(traceType, dbPointer, p, x, sqlite3_expanded_sql)
         },
             dbPointer)
         #elseif os(Linux)
@@ -250,9 +250,10 @@ extension Database {
             let dbPointer = Unmanaged.passUnretained(self).toOpaque()
             sqlite3_trace_v2(
                 sqliteConnection,
-                UInt32(SQLITE_TRACE_STMT),
-                { (mask, dbPointer, stmt, unexpandedSQL) -> Int32 in
-                    Database.trace_v2(mask, dbPointer, stmt, unexpandedSQL, sqlite3_expanded_sql)
+                UInt32(SQLITE_TRACE_PROFILE), // UInt32(SQLITE_TRACE_STMT),
+                { (traceType, dbPointer, p, x) -> Int32 in
+                    // Database.trace_v2(mask, dbPointer, stmt, unexpandedSQL, sqlite3_expanded_sql)
+                    Database.trace_v2(traceType, dbPointer, p, x, sqlite3_expanded_sql)
             },
                 dbPointer)
         } else {
@@ -273,20 +274,36 @@ extension Database {
     
     // Precondition: configuration.trace != nil
     private static func trace_v2(
-        _ mask: UInt32,
+        _ traceType: UInt32,
         _ dbPointer: UnsafeMutableRawPointer?,
-        _ stmt: UnsafeMutableRawPointer?,
-        _ unexpandedSQL: UnsafeMutableRawPointer?,
+        _ p: UnsafeMutableRawPointer?,
+        _ x: UnsafeMutableRawPointer?,
         _ sqlite3_expanded_sql: @convention(c) (OpaquePointer?) -> UnsafeMutablePointer<Int8>?)
         -> Int32
     {
-        guard let stmt = stmt else { return SQLITE_OK }
-        guard let expandedSQLCString = sqlite3_expanded_sql(OpaquePointer(stmt)) else { return SQLITE_OK }
-        let sql = String(cString: expandedSQLCString)
-        sqlite3_free(expandedSQLCString)
-        let db = Unmanaged<Database>.fromOpaque(dbPointer!).takeUnretainedValue()
-        db.configuration.trace!(sql)
-        return SQLITE_OK
+        switch traceType {
+        case UInt32(SQLITE_TRACE_STMT):
+            guard let stmt = p else { return SQLITE_OK }
+            guard let expandedSQLCString = sqlite3_expanded_sql(OpaquePointer(stmt)) else { return SQLITE_OK }
+            let sql = String(cString: expandedSQLCString)
+            sqlite3_free(expandedSQLCString)
+            let db = Unmanaged<Database>.fromOpaque(dbPointer!).takeUnretainedValue()
+            db.configuration.trace!(sql)
+            return SQLITE_OK
+        case UInt32(SQLITE_TRACE_PROFILE):
+            guard let stmt = p else { return SQLITE_OK }
+            guard let nanosPtr = x else { return SQLITE_OK }
+            let nanos = nanosPtr.assumingMemoryBound(to: Int64.self).pointee
+            guard let expandedSQLCString = sqlite3_expanded_sql(OpaquePointer(stmt)) else { return SQLITE_OK }
+            let sql = String(cString: expandedSQLCString)
+            sqlite3_free(expandedSQLCString)
+            let sqlWithTiming = "\(sql) \n-- SQLDURATION: \(Double(nanos) / 1_000_000)ms"
+            let db = Unmanaged<Database>.fromOpaque(dbPointer!).takeUnretainedValue()
+            db.configuration.trace!(sqlWithTiming)
+            return SQLITE_OK
+        default:
+            return SQLITE_OK
+        }
     }
     
     private func setupForeignKeys() throws {
